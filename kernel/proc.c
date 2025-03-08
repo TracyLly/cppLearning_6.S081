@@ -126,7 +126,7 @@ found:
   memset(&p->context, 0, sizeof(p->context));
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
-
+  p->tracemask = 0;
   return p;
 }
 
@@ -267,6 +267,7 @@ fork(void)
     return -1;
   }
 
+  np->tracemask = p->tracemask;
   // Copy user memory from parent to child.
   if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
     freeproc(np);
