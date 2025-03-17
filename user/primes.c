@@ -17,8 +17,6 @@ void runprocess(int listenfd) {
     if (read_bytes == 0) {
       close(listenfd);
       if (forked) {
-        // tell my children I have no more number to offer
-        close(pipes[1]);
         // wait my child termination
         int child_pid;
         wait(&child_pid);
@@ -39,13 +37,13 @@ void runprocess(int listenfd) {
         forked = 1;
         int ret = fork();
         if (ret == 0) {
+          // i am the parent
+          close(pipes[0]);
+        } else {
           // i am the child
           close(pipes[1]);
           close(listenfd);
           runprocess(pipes[0]);
-        } else {
-          // i am the parent
-          close(pipes[0]);
         }
       }
 
