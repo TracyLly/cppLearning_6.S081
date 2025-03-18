@@ -1,8 +1,8 @@
 
 xv6 kernel is booting
 
-hart 2 starting
 hart 1 starting
+hart 2 starting
 page table 0x0000000087f24000
 ..0: pte 0x0000000021fc8001 pa 0x0000000087f20000
 .. ..0: pte 0x0000000021fc7c01 pa 0x0000000087f1f000
@@ -14,6 +14,10 @@ page table 0x0000000087f24000
 .. .. ..510: pte 0x0000000021fdd807 pa 0x0000000087f76000
 .. .. ..511: pte 0x0000000020001c0b pa 0x0000000080007000
 init: starting sh
-$ echo hi
-hi
-$ qemu-system-riscv64: terminating on signal 15 from pid 30217 (make)
+$ stats
+copyin: 0
+copyinstr: 0
+$ stats
+copyin: 0
+copyinstr: 0
+$ qemu-system-riscv64: terminating on signal 15 from pid 28225 (make)
