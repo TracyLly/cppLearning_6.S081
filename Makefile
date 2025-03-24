@@ -36,18 +36,9 @@ OBJS = \
   $K/kernelvec.o \
   $K/plic.o \
   $K/virtio_disk.o \
-
-ifeq ($(LAB),pgtbl)
-OBJS += \
-	$K/vmcopyin.o
-endif
-
-ifeq ($(LAB),$(filter $(LAB), pgtbl lock))
-OBJS += \
-	$K/stats.o\
-	$K/sprintf.o
-endif
-
+  $K/stats.o\
+  $K/sprintf.o \
+  $K/vmcopyin.o\
 
 ifeq ($(LAB),net)
 OBJS += \
@@ -182,6 +173,7 @@ UPROGS=\
 	$U/_xargs\
 	$U/_trace\
 	$U/_sysinfotest\
+	$U/_alarmtest\
 
 
 
@@ -195,7 +187,6 @@ ifeq ($(LAB),traps)
 UPROGS += \
 	$U/_call\
 	$U/_bttest
-
 endif
 
 ifeq ($(LAB),lazy)

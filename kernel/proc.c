@@ -18,7 +18,6 @@ struct spinlock pid_lock;
 extern void forkret(void);
 static void wakeup1(struct proc *chan);
 static void freeproc(struct proc *p);
-
 extern char trampoline[]; // trampoline.S
 
 // initialize the proc table at boot time.
@@ -106,8 +105,15 @@ allocproc(void)
 
 found:
   p->pid = allocpid();
+
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
+    release(&p->lock);
+    return 0;
+  }
+
+  // Allocate a alarmframe page.
+  if((p->alarmframe = (struct trapframe *)kalloc()) == 0){
     release(&p->lock);
     return 0;
   }
@@ -132,7 +138,7 @@ found:
   // physical address is already allocated in procinit()
   uint64 va = KSTACK((int) (p - proc));
   pte_t pa = kvmpa(va);
-  memset((void *)pa, 0, PGSIZE); 
+  memset((void *)pa, 0, PGSIZE);
   ukvmmap(p->kpagetable, va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
   p->kstack = va;
 
@@ -144,6 +150,12 @@ found:
 
   // Zero initializes the tracemask for a new process
   p->tracemask = 0;
+
+  // Zero initializes the alarm releated fields
+  p->alarm_period = 0;
+  p->alarm_handler = 0;
+  p->ticks_since_last_alarm = 0;
+  p->inalarm = 0;
   return p;
 }
 
@@ -167,6 +179,9 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+  p->alarm_handler = 0;
+  p->alarm_period = 0;
+  p->inalarm = 0;
   if (p->kpagetable) {
     freeprockvm(p);
     p->kpagetable = 0;
@@ -174,6 +189,9 @@ freeproc(struct proc *p)
   if (p->kstack) {
     p->kstack = 0;
   }
+  if (p->alarmframe)
+    kfree((void *)p->alarmframe);
+  p->alarmframe = 0;
 }
 
 // Create a user page table for a given process,
@@ -269,18 +287,15 @@ growproc(int n)
 
   sz = p->sz;
   if(n > 0){
-    // 内核页的虚拟地址不能溢出PLIC
     if (sz + n > PLIC || (sz = uvmalloc(p->pagetable, sz, sz + n)) == 0) {
       return -1;
     }
     if (pagecopy(p->pagetable, p->kpagetable, p->sz, sz) != 0) {
-      // 增量同步[old size, new size]
       return -1;
     }
   } else if(n < 0){
     sz = uvmdealloc(p->pagetable, sz, sz + n);
     if (sz != p->sz) {
-      // 缩量同步[new size, old size]
       uvmunmap(p->kpagetable, PGROUNDUP(sz), (PGROUNDUP(p->sz) - PGROUNDUP(sz)) / PGSIZE, 0);
     }
   }
@@ -319,7 +334,6 @@ fork(void)
     release(&np->lock);
     return -1;
   }
-
   np->parent = p;
 
   // copy saved user registers.
@@ -518,12 +532,12 @@ scheduler(void)
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
-        w_satp(MAKE_SATP(p->kpagetable));
-        sfence_vma();
+        ukvminithard(p->kpagetable);
         swtch(&c->context, &p->context);
 
         // Process is done running for now.
         // It should have changed its p->state before coming back.
+        kvminithart();
         c->proc = 0;
 
         found = 1;
@@ -759,4 +773,3 @@ count_free_proc(void) {
   }
   return count;
 }
-
