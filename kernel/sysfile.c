@@ -290,10 +290,11 @@ sys_open(void)
   int fd, omode;
   struct file *f;
   struct inode *ip;
-  int n, r;
+  int n;
 
   if((n = argstr(0, path, MAXPATH)) < 0 || argint(1, &omode) < 0)
     return -1;
+
   begin_op();
 
   if(omode & O_CREATE){
@@ -309,32 +310,6 @@ sys_open(void)
     }
     ilock(ip);
     if(ip->type == T_DIR && omode != O_RDONLY){
-      iunlockput(ip);
-      end_op();
-      return -1;
-    }
-  }
-
-  // deal with a symbolic link if it is and no_follow flag is not set
-  int depth = 0;
-  while (ip->type == T_SYMLINK && !(omode & O_NOFOLLOW)) {
-    char ktarget[MAXPATH];
-    memset(ktarget, 0, MAXPATH);
-    if ((r = readi(ip, 0, (uint64)ktarget, 0, MAXPATH)) < 0) {
-      iunlockput(ip);
-      end_op();
-      return -1;
-    }
-    iunlockput(ip);
-    if((ip = namei(ktarget)) == 0){
-      end_op();
-      return -1;
-    }
-
-    ilock(ip);
-    depth++;
-    if (depth > 10) {
-      // maybe form a cycle
       iunlockput(ip);
       end_op();
       return -1;
@@ -510,39 +485,97 @@ sys_pipe(void)
   return 0;
 }
 
-int sys_symlink(char *target, char *path) {
-  char kpath[MAXPATH], ktarget[MAXPATH];
-  memset(kpath, 0, MAXPATH);
-  memset(ktarget, 0, MAXPATH);
-  struct inode *ip;
-  int n, r;
+uint64
+sys_mmap(void) {
+  uint64 failure = (uint64)((char *) -1);
+  struct proc* p = myproc();
+  uint64 addr;
+  int length, prot, flags, fd, offset;
+  struct file* f;
 
-  if((n = argstr(0, ktarget, MAXPATH)) < 0)
+  // parse argument
+  if (argaddr(0, &addr) < 0 || argint(1, &length) < 0 || argint(2, &prot) < 0
+      || argint(3, &flags) < 0 || argfd(4, &fd, &f) < 0 || argint(5, &offset) < 0)
+    return failure;
+
+  // sanity check
+  length = PGROUNDUP(length);
+  if (MAXVA - length < p->sz)
+    return failure;
+  if (!f->readable && (prot & PROT_READ))
+    return failure;
+  if (!f->writable && (prot & PROT_WRITE) && (flags == MAP_SHARED))
+    return failure;
+
+  // find an empty vma slot and fill in
+  for (int i = 0; i < NVMA; i++) {
+    struct vma* vma = &p->vmas[i];
+    if (vma->valid == 0) {
+      vma->valid = 1;
+      vma->addr = p->sz;
+      p->sz += length;
+      vma->length = length;
+      vma->prot = prot;
+      vma->flags = flags;
+      vma->fd = fd;
+      vma->f = f;
+      filedup(f);
+      vma->offset = offset;
+      return vma->addr;
+    }
+  }
+
+  // all vma are in use
+  return failure;
+}
+
+uint64
+sys_munmap(void) {
+  uint64 addr;
+  int length;
+  if (argaddr(0, &addr) < 0 || argint(1, &length) < 0)
+    return -1;
+  struct proc *p = myproc();
+  struct vma* vma = 0;
+  int idx = -1;
+  // find the corresponding vma
+  for (int i = 0; i < NVMA; i++) {
+    if (p->vmas[i].valid && addr >= p->vmas[i].addr && addr <= p->vmas[i].addr + p->vmas[i].length) {
+      idx = i;
+      vma = &p->vmas[i];
+      break;
+    }
+  }
+  if (idx == -1)
+    // not in a valid VMA
     return -1;
 
-  if ((n = argstr(1, kpath, MAXPATH)) < 0)
-    return -1;
-
-  int ret = 0;
-  begin_op();
-
-  if((ip = namei(kpath)) != 0){
-    // symlink already exists
-    ret = -1;
-    goto final;
+  addr = PGROUNDDOWN(addr);
+  length = PGROUNDUP(length);
+  if (vma->flags & MAP_SHARED) {
+    // write back
+    if (filewrite(vma->f, addr, length) < 0) {
+      printf("munmap: filewrite < 0\n");
+    }
   }
-  // create an inode block for the symlink
-  ip = create(kpath, T_SYMLINK, 0, 0);
-  if(ip == 0){
-    ret = -1;
-    goto final;
-  }
-  // write the target path into inode's data block
-  if ((r = writei(ip, 0, (uint64)ktarget, 0, MAXPATH)) < 0)
-    ret = -1;
-  iunlockput(ip);
+  uvmunmap(p->pagetable, addr, length/PGSIZE, 1);
 
-final:
-  end_op();
-  return ret;
+  // change the mmap parameter
+  if (addr == vma->addr && length == vma->length) {
+    // fully unmapped
+    fileclose(vma->f);
+    vma->valid = 0;
+  } else if (addr == vma->addr) {
+    // cover the beginning
+    vma->addr += length;
+    vma->length -= length;
+    vma->offset += length;
+  } else if ((addr + length) == (vma->addr + vma->length)) {
+    // cover the end
+    vma->length -= length;
+  } else {
+    panic("munmap neither cover beginning or end of mapped region");
+  }
+
+  return 0;
 }
