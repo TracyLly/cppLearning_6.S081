@@ -36,7 +36,7 @@ trapinithart(void)
 void
 usertrap(void)
 {
-  int which_dev = devintr();
+  int which_dev = 0;
 
   if((r_sstatus() & SSTATUS_SPP) != 0)
     panic("usertrap: not from user mode");
@@ -65,8 +65,13 @@ usertrap(void)
     intr_on();
 
     syscall();
+  } else if (r_scause() == 15) {
+    // write permission fault on a read-only COW page
+    if (cowalloc(p->pagetable, r_stval()) < 0) {
+      p->killed = 1;
+    }
   } else if((which_dev = devintr()) != 0){
-    // ok
+      // ok
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
@@ -77,17 +82,8 @@ usertrap(void)
     exit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2) {
-      p->ticks_since_last_alarm += 1;
-      if (p->inalarm == 0 && p->alarm_period != 0 && p->ticks_since_last_alarm == p->alarm_period) {
-        p->inalarm = 1;
-        *p->alarmframe = *p->trapframe;
-        // save all the trapframe to alarmframe for later restore
-        // jump to the alarm handler when returning back to user space
-        p->trapframe->epc = (uint64)p->alarm_handler;
-      }
-      yield();
-  }
+  if(which_dev == 2)
+    yield();
 
   usertrapret();
 }
@@ -117,6 +113,7 @@ usertrapret(void)
 
   // set up the registers that trampoline.S's sret will use
   // to get to user space.
+  
   // set S Previous Privilege mode to User.
   unsigned long x = r_sstatus();
   x &= ~SSTATUS_SPP; // clear SPP to 0 for user mode
